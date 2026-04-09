@@ -1,0 +1,29 @@
+1. Update values before first install:
+   - testProfile
+   - namespaceManagement
+   - postgres.host
+   - postgres.benchmarkDatabase
+   - postgres.pgbenchUser / postgres.pgbenchPassword
+
+2. Install or upgrade:
+   helm upgrade --install {{ .Release.Name }} . -n {{ .Release.Namespace }} --create-namespace
+
+3. This chart is addon-only:
+   - blackbox-exporter
+   - Probe resources
+   - Pushgateway
+   - Grafana dashboard ConfigMap
+   - pgbench runner and benchmark Jobs
+   - DSM DB cluster OS metrics collector
+
+4. Enable one test scenario at a time:
+   - jobs.init.enabled=true
+   - jobs.smoke.enabled=true
+   - jobs.baselineRw.enabled=true
+   - jobs.baselineRo.enabled=true
+   - jobs.ramp.enabled=true
+   - jobs.dataSweep10m.enabled=true
+   - jobs.dataSweep20m.enabled=true
+   - jobs.stress.enabled=true
+   - jobs.haObservation.enabled=true
+   - jobs.soak.enabled=true

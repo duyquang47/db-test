@@ -1,0 +1,387 @@
+{{- if eq (include "pgdsm.loadtestEnabled" .) "true" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "pgbench-connection") }}
+  namespace: {{ include "pgdsm.loadtestNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "loadtest") | nindent 4 }}
+type: Opaque
+stringData:
+  PGHOST: {{ .Values.postgres.host | quote }}
+  PGPORT: {{ .Values.postgres.port | quote }}
+  PGDATABASE: {{ .Values.postgres.benchmarkDatabase | quote }}
+  PGUSER: {{ .Values.postgres.pgbenchUser | quote }}
+  PGPASSWORD: {{ .Values.postgres.pgbenchPassword | quote }}
+  PGSSLMODE: {{ .Values.postgres.sslmode | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "pgbench-scripts") }}
+  namespace: {{ include "pgdsm.loadtestNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "loadtest") | nindent 4 }}
+data:
+  pgbench-metrics.sh: |
+    #!/bin/sh
+    set -eu
+
+    : "${PGHOST:=unknown}"
+    : "${PGPORT:=5432}"
+    : "${PGDATABASE:=postgres}"
+    : "${PGBENCH_SCENARIO:=manual}"
+    : "${PGBENCH_PROFILE:=unknown}"
+    : "${PGBENCH_MODE:=rw}"
+    : "${PGBENCH_METRICS_DIR:=/shared}"
+
+    PGBENCH_SUMMARY_FILE="${PGBENCH_METRICS_DIR}/${PGBENCH_SCENARIO}-summary.log"
+    PGBENCH_STATUS_FILE="${PGBENCH_METRICS_DIR}/${PGBENCH_SCENARIO}-status"
+    PGBENCH_DONE_FILE="${PGBENCH_METRICS_DIR}/done"
+    PGBENCH_METRICS_FILE="${PGBENCH_METRICS_DIR}/metrics.prom"
+    PGBENCH_LOG_PREFIX="${PGBENCH_METRICS_DIR}/pgbench_log_${PGBENCH_SCENARIO}"
+
+    escape_label_value() {
+      printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    }
+
+    metric_labels() {
+      printf 'scenario="%s",profile="%s",database="%s",target="%s:%s",mode="%s",clients="%s",threads="%s",scale="%s"' \
+        "$(escape_label_value "${PGBENCH_SCENARIO}")" \
+        "$(escape_label_value "${PGBENCH_PROFILE}")" \
+        "$(escape_label_value "${PGDATABASE}")" \
+        "$(escape_label_value "${PGHOST}")" \
+        "$(escape_label_value "${PGPORT}")" \
+        "$(escape_label_value "${PGBENCH_MODE}")" \
+        "$(escape_label_value "${PGBENCH_CLIENTS:-0}")" \
+        "$(escape_label_value "${PGBENCH_THREADS:-0}")" \
+        "$(escape_label_value "${PGBENCH_DATASET_SCALE:-0}")"
+    }
+
+    metrics_reset() {
+      rm -f "${PGBENCH_SUMMARY_FILE}" "${PGBENCH_STATUS_FILE}" "${PGBENCH_DONE_FILE}" "${PGBENCH_METRICS_FILE}" "${PGBENCH_METRICS_FILE}.tmp"
+      rm -f "${PGBENCH_METRICS_DIR}"/pgbench_log_"${PGBENCH_SCENARIO}"*
+      rm -f "${PGBENCH_METRICS_DIR}/${PGBENCH_SCENARIO}-latency-us.txt"
+    }
+
+    mark_metrics_done() {
+      touch "${PGBENCH_DONE_FILE}"
+    }
+
+    run_command_with_summary() {
+      (
+        set +e
+        "$@" 2>&1
+        rc=$?
+        echo "${rc}" > "${PGBENCH_STATUS_FILE}"
+        exit 0
+      ) | tee "${PGBENCH_SUMMARY_FILE}"
+    }
+
+    build_latency_samples() {
+      samples_file="${PGBENCH_METRICS_DIR}/${PGBENCH_SCENARIO}-latency-us.txt"
+      rm -f "${samples_file}"
+      for logfile in "${PGBENCH_LOG_PREFIX}"*; do
+        [ -f "${logfile}" ] || continue
+        awk '$3 ~ /^[0-9]+$/ { print $3 }' "${logfile}" >> "${samples_file}"
+      done
+      if [ -f "${samples_file}" ]; then
+        sort -n -o "${samples_file}" "${samples_file}"
+      fi
+      printf '%s' "${samples_file}"
+    }
+
+    calc_percentile_ms() {
+      percentile="$1"
+      samples_file="$2"
+      if [ ! -s "${samples_file}" ]; then
+        return 0
+      fi
+      count=$(wc -l < "${samples_file}" | tr -d ' ')
+      if [ "${count}" -eq 0 ]; then
+        return 0
+      fi
+      index=$(( (count * percentile + 99) / 100 ))
+      awk -v n="${index}" 'NR == n { printf "%.3f", $1 / 1000; exit }' "${samples_file}"
+    }
+
+    write_metrics_file() {
+      run_success="$1"
+      elapsed_seconds="$2"
+      summary_file="$3"
+      samples_file="$4"
+      output_file="${PGBENCH_METRICS_FILE}.tmp"
+      labels="$(metric_labels)"
+      timestamp_now="$(date +%s)"
+      tps="$(awk '/^tps = / { print $3 }' "${summary_file}" | tail -n 1)"
+      latency_avg="$(awk '/^latency average = / { print $4 }' "${summary_file}" | tail -n 1)"
+      latency_stddev="$(awk '/^latency stddev = / { print $4 }' "${summary_file}" | tail -n 1)"
+      initial_connection_time="$(awk '/^initial connection time = / { print $5 }' "${summary_file}" | tail -n 1)"
+      processed_transactions="$(awk '/^number of transactions actually processed:/ { split($6, a, "/"); print a[1] }' "${summary_file}" | tail -n 1)"
+      failed_transactions="$(awk '/^number of failed transactions:/ { print $5 }' "${summary_file}" | tail -n 1)"
+      database_size_bytes="$(psql -Atqc 'select pg_database_size(current_database())' 2>/dev/null | tail -n 1)"
+      latency_p95="$(calc_percentile_ms 95 "${samples_file}")"
+      latency_p99="$(calc_percentile_ms 99 "${samples_file}")"
+
+      : "${tps:=0}"
+      : "${latency_avg:=0}"
+      : "${latency_stddev:=0}"
+      : "${initial_connection_time:=0}"
+      : "${processed_transactions:=0}"
+      : "${failed_transactions:=0}"
+      : "${database_size_bytes:=0}"
+      : "${latency_p95:=0}"
+      : "${latency_p99:=0}"
+
+      cat > "${output_file}" <<EOF
+    # TYPE pgbench_run_success gauge
+    pgbench_run_success{${labels}} ${run_success}
+    # TYPE pgbench_last_run_timestamp_seconds gauge
+    pgbench_last_run_timestamp_seconds{${labels}} ${timestamp_now}
+    # TYPE pgbench_duration_seconds gauge
+    pgbench_duration_seconds{${labels}} ${elapsed_seconds}
+    # TYPE pgbench_scale gauge
+    pgbench_scale{${labels}} ${PGBENCH_DATASET_SCALE:-0}
+    # TYPE pgbench_tps gauge
+    pgbench_tps{${labels}} ${tps}
+    # TYPE pgbench_latency_avg_ms gauge
+    pgbench_latency_avg_ms{${labels}} ${latency_avg}
+    # TYPE pgbench_latency_stddev_ms gauge
+    pgbench_latency_stddev_ms{${labels}} ${latency_stddev}
+    # TYPE pgbench_latency_p95_ms gauge
+    pgbench_latency_p95_ms{${labels}} ${latency_p95}
+    # TYPE pgbench_latency_p99_ms gauge
+    pgbench_latency_p99_ms{${labels}} ${latency_p99}
+    # TYPE pgbench_initial_connection_time_ms gauge
+    pgbench_initial_connection_time_ms{${labels}} ${initial_connection_time}
+    # TYPE pgbench_database_size_bytes gauge
+    pgbench_database_size_bytes{${labels}} ${database_size_bytes}
+    # TYPE pgbench_transactions_processed_total gauge
+    pgbench_transactions_processed_total{${labels}} ${processed_transactions}
+    # TYPE pgbench_error_total gauge
+    pgbench_error_total{${labels}} ${failed_transactions}
+    EOF
+      mv "${output_file}" "${PGBENCH_METRICS_FILE}"
+    }
+
+    run_pgbench_init_with_metrics() {
+      metrics_reset
+      started_at="$(date +%s)"
+      run_command_with_summary pgbench -i -I dtgvp -s "${PGBENCH_SCALE:-10}" "${PGDATABASE}"
+      finished_at="$(date +%s)"
+      status="$(cat "${PGBENCH_STATUS_FILE}" 2>/dev/null || echo 1)"
+      labels="$(metric_labels)"
+      output_file="${PGBENCH_METRICS_FILE}.tmp"
+      cat > "${output_file}" <<EOF
+    # TYPE pgbench_dataset_prepare_success gauge
+    pgbench_dataset_prepare_success{${labels}} $([ "${status}" -eq 0 ] && echo 1 || echo 0)
+    # TYPE pgbench_dataset_prepare_duration_seconds gauge
+    pgbench_dataset_prepare_duration_seconds{${labels}} $((finished_at - started_at))
+    # TYPE pgbench_scale gauge
+    pgbench_scale{${labels}} ${PGBENCH_SCALE:-10}
+    EOF
+      mv "${output_file}" "${PGBENCH_METRICS_FILE}"
+      return "${status}"
+    }
+
+    run_pgbench_with_metrics() {
+      metrics_reset
+      started_at="$(date +%s)"
+      run_command_with_summary pgbench -l --log-prefix="${PGBENCH_LOG_PREFIX}" "$@" "${PGDATABASE}"
+      finished_at="$(date +%s)"
+      status="$(cat "${PGBENCH_STATUS_FILE}" 2>/dev/null || echo 1)"
+      samples_file="$(build_latency_samples)"
+      run_success=0
+      if [ "${status}" -eq 0 ]; then
+        run_success=1
+      fi
+      write_metrics_file "${run_success}" "$((finished_at - started_at))" "${PGBENCH_SUMMARY_FILE}" "${samples_file}"
+      return "${status}"
+    }
+  pushgateway-sidecar.sh: |
+    #!/bin/sh
+    set -eu
+    : "${PGBENCH_METRICS_DIR:=/shared}"
+    : "${PGBENCH_PUSHGATEWAY_URL:=http://pushgateway:9091}"
+    metrics_file="${PGBENCH_METRICS_DIR}/metrics.prom"
+    done_file="${PGBENCH_METRICS_DIR}/done"
+    push_url="${PGBENCH_PUSHGATEWAY_URL}/metrics/job/pgbench"
+
+    while true; do
+      if [ -s "${metrics_file}" ]; then
+        curl --silent --show-error --fail --data-binary @"${metrics_file}" "${push_url}" >/dev/null || true
+      fi
+      if [ -f "${done_file}" ]; then
+        exit 0
+      fi
+      sleep 5
+    done
+  init.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_SCALE:=10}"
+    : "${PGBENCH_DATASET_SCALE:=${PGBENCH_SCALE}}"
+    echo "Reinitializing pgbench dataset in database ${PGDATABASE} with scale ${PGBENCH_SCALE}"
+    run_pgbench_init_with_metrics
+  smoke.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_CLIENTS:=4}"
+    : "${PGBENCH_THREADS:=2}"
+    : "${PGBENCH_DURATION:=300}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    echo "Running smoke test: clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    run_pgbench_with_metrics -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+  baseline-rw.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_CLIENTS:=5}"
+    : "${PGBENCH_THREADS:=2}"
+    : "${PGBENCH_DURATION:=900}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    echo "Running baseline RW test: clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    run_pgbench_with_metrics -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+  baseline-ro.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_CLIENTS:=10}"
+    : "${PGBENCH_THREADS:=4}"
+    : "${PGBENCH_DURATION:=900}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    echo "Running baseline RO test: clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    run_pgbench_with_metrics -S -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+  ramp.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_STEPS:=10 25 50 75 100 125 150}"
+    : "${PGBENCH_THREADS:=8}"
+    : "${PGBENCH_DURATION:=600}"
+    : "${PGBENCH_SLEEP_BETWEEN:=15}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    for clients in ${PGBENCH_STEPS}; do
+      PGBENCH_CLIENTS="${clients}"
+      export PGBENCH_CLIENTS
+      echo "Running ramp step: clients=${clients} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+      run_pgbench_with_metrics -c "${clients}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+      echo "Ramp step completed for clients=${clients}"
+      sleep "${PGBENCH_SLEEP_BETWEEN}"
+    done
+  data-sweep.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_SCALE:=100}"
+    : "${PGBENCH_SKIP_INIT:=false}"
+    : "${PGBENCH_MODE:=rw}"
+    : "${PGBENCH_CLIENTS:=32}"
+    : "${PGBENCH_THREADS:=8}"
+    : "${PGBENCH_DURATION:=900}"
+    : "${PGBENCH_DATASET_SCALE:=${PGBENCH_SCALE}}"
+    if [ "${PGBENCH_SKIP_INIT}" != "true" ]; then
+      echo "Preparing data sweep dataset: scale=${PGBENCH_SCALE}"
+      run_pgbench_init_with_metrics
+    fi
+    mode_args=""
+    if [ "${PGBENCH_MODE}" = "ro" ]; then
+      mode_args="-S"
+    elif [ "${PGBENCH_MODE}" = "simple-update" ]; then
+      mode_args="-N"
+    fi
+    echo "Running data sweep test: scale=${PGBENCH_SCALE} mode=${PGBENCH_MODE} clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    # shellcheck disable=SC2086
+    run_pgbench_with_metrics ${mode_args} -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+  stress.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_STEPS:=100 125 150 175 200}"
+    : "${PGBENCH_THREADS:=8}"
+    : "${PGBENCH_DURATION:=600}"
+    : "${PGBENCH_SLEEP_BETWEEN:=15}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    for clients in ${PGBENCH_STEPS}; do
+      PGBENCH_CLIENTS="${clients}"
+      export PGBENCH_CLIENTS
+      echo "Running stress step: clients=${clients} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+      run_pgbench_with_metrics -c "${clients}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+      echo "Stress step completed for clients=${clients}"
+      sleep "${PGBENCH_SLEEP_BETWEEN}"
+    done
+  ha-observation.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_CLIENTS:=32}"
+    : "${PGBENCH_THREADS:=8}"
+    : "${PGBENCH_DURATION:=1800}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    echo "Running HA observation window: clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    echo "Trigger DSM failover or maintenance action externally during this run if the scenario requires it."
+    run_pgbench_with_metrics -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+  soak.sh: |
+    #!/bin/sh
+    set -eu
+    . /scripts/pgbench-metrics.sh
+    trap 'mark_metrics_done' EXIT
+    : "${PGBENCH_CLIENTS:=32}"
+    : "${PGBENCH_THREADS:=8}"
+    : "${PGBENCH_DURATION:=7200}"
+    : "${PGBENCH_DATASET_SCALE:=10}"
+    echo "Running soak test: clients=${PGBENCH_CLIENTS} threads=${PGBENCH_THREADS} duration=${PGBENCH_DURATION}"
+    run_pgbench_with_metrics -c "${PGBENCH_CLIENTS}" -j "${PGBENCH_THREADS}" -T "${PGBENCH_DURATION}" -M prepared -r -P 30
+---
+{{- if .Values.loadtest.runner.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "pgbench-runner") }}
+  namespace: {{ include "pgdsm.loadtestNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "loadtest") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: loadtest
+  template:
+    metadata:
+      labels:
+        {{- include "pgdsm.componentLabels" (dict "root" . "component" "loadtest") | nindent 8 }}
+    spec:
+      containers:
+        - name: pgbench
+          image: {{ .Values.images.pgbench }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - sleep infinity
+          envFrom:
+            - secretRef:
+                name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "pgbench-connection") }}
+          resources:
+            {{- toYaml .Values.loadtest.runner.resources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "pgbench-scripts") }}
+            defaultMode: 493
+{{- end }}
+{{- end }}

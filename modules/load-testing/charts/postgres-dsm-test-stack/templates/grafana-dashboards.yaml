@@ -1,0 +1,15 @@
+{{- if and .Values.grafanaDashboards.enabled (.Files.Get "dashboards/postgres-performance-test-metrics-dashboard.json") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "dashboard-postgres-performance") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "grafana-dashboard") | nindent 4 }}
+    grafana_dashboard: "1"
+  annotations:
+    pgdsm.io/dashboard-checksum: {{ .Values.grafanaDashboards.checksum | quote }}
+data:
+  postgres-performance-test-metrics.json: |
+{{ .Files.Get "dashboards/postgres-performance-test-metrics-dashboard.json" | nindent 4 }}
+{{- end }}

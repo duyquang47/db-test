@@ -131,6 +131,30 @@ variable "metrics_pusher_image" {
   default     = "curlimages/curl:8.7.1"
 }
 
+variable "db_cluster_metrics_enabled" {
+  description = "Collect DSM DB cluster OS metrics from the DB Kubernetes cluster and push them to Pushgateway."
+  type        = bool
+  default     = false
+}
+
+variable "db_cluster_kubeconfig_path" {
+  description = "Path to kubeconfig for the DSM DB Kubernetes cluster."
+  type        = string
+  default     = "./k8s-db.yaml"
+}
+
+variable "db_cluster_collector_image" {
+  description = "Container image for the DSM DB cluster metrics collector."
+  type        = string
+  default     = "python:3.12-slim"
+}
+
+variable "db_cluster_poll_interval_seconds" {
+  description = "Polling interval in seconds for DSM DB cluster OS metrics collection."
+  type        = number
+  default     = 30
+}
+
 variable "pushgateway_scrape_interval" {
   description = "Prometheus scrape interval for Pushgateway metrics."
   type        = string
@@ -264,29 +288,29 @@ variable "pgbench_jobs" {
 variable "prometheus_stack_chart_version" {
   description = "Prometheus stack Helm chart version"
   type        = string
-  default     = "~> 60.0"
+  default     = "82.16.0"
 }
 
 variable "mysql_exporter_chart_version" {
   description = "MySQL exporter Helm chart version"
   type        = string
-  default     = "~> 2.0"
+  default     = "2.13.0"
 }
 
 variable "postgres_exporter_chart_version" {
   description = "PostgreSQL exporter Helm chart version"
   type        = string
-  default     = "~> 0.0"
+  default     = "7.5.2"
 }
 
 variable "pushgateway_chart_version" {
   description = "Pushgateway Helm chart version"
   type        = string
-  default     = "~> 2.0"
+  default     = "2.0.4"
 }
 
 variable "blackbox_exporter_chart_version" {
   description = "Blackbox exporter Helm chart version"
   type        = string
-  default     = "~> 9.0"
+  default     = "9.0.3"
 }

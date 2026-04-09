@@ -3,17 +3,37 @@ output "prometheus_stack_release_name" {
   value       = helm_release.prometheus_stack.name
 }
 
-output "prometheus_stack_namespace" {
-  description = "Prometheus stack Kubernetes namespace"
+output "namespace" {
+  description = "Namespace where monitoring stack is deployed."
   value       = helm_release.prometheus_stack.namespace
 }
 
-output "mysql_exporter_enabled" {
-  description = "Whether MySQL exporter is deployed"
-  value       = length(helm_release.mysql_exporter) > 0
+output "prometheus_stack_release" {
+  description = "Main kube-prometheus-stack Helm release metadata."
+  value = {
+    name      = helm_release.prometheus_stack.name
+    namespace = helm_release.prometheus_stack.namespace
+    status    = helm_release.prometheus_stack.status
+    version   = helm_release.prometheus_stack.version
+  }
 }
 
-output "postgres_exporter_enabled" {
-  description = "Whether PostgreSQL exporter is deployed"
-  value       = length(helm_release.postgres_exporter) > 0
+output "mysql_exporter_release" {
+  description = "MySQL exporter Helm release metadata."
+  value = {
+    name      = helm_release.mysql_exporter.name
+    namespace = helm_release.mysql_exporter.namespace
+    status    = helm_release.mysql_exporter.status
+    version   = helm_release.mysql_exporter.version
+  }
+}
+
+output "postgres_exporter_release" {
+  description = "PostgreSQL exporter Helm release metadata."
+  value = {
+    name      = helm_release.postgres_exporter.name
+    namespace = helm_release.postgres_exporter.namespace
+    status    = helm_release.postgres_exporter.status
+    version   = helm_release.postgres_exporter.version
+  }
 }

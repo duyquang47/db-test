@@ -1,0 +1,48 @@
+testProfile: 2c4g
+
+namespaceManagement:
+  createMonitoring: false
+  createLoadtest: true
+
+postgres:
+  host: "171.226.13.42"
+  port: 5432
+  benchmarkDatabase: "benchmark_pgbench"
+  sslmode: "require"
+  pgbenchUser: "pgbench_user"
+  pgbenchPassword: "REPLACE_PGBENCH_PASSWORD"
+
+dbClusterMetrics:
+  enabled: false
+  kubeconfig: ""
+  pollIntervalSeconds: 30
+  targetName: ""
+  targetHost: ""
+  targetPort: 5432
+
+jobs:
+  init:
+    enabled: false
+    scale: "10"
+  smoke:
+    enabled: false
+  baselineRw:
+    enabled: false
+  baselineRo:
+    enabled: false
+  ramp:
+    enabled: false
+  dataSweep10m:
+    enabled: false
+    scale: "100"
+    reinitialize: true
+  dataSweep20m:
+    enabled: false
+    scale: "200"
+    reinitialize: true
+  stress:
+    enabled: false
+  haObservation:
+    enabled: false
+  soak:
+    enabled: false

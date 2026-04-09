@@ -1,45 +1,19 @@
-# Prometheus MySQL Exporter Configuration
-# Multi-target support for monitoring MySQL instances
-
-mysql:
-  host: localhost
-  port: 3306
-  user: exporter
-  password: ""
-  db: ""
-  maxIdleConns: 3
-  maxOpenConns: 10
-
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-  limits:
-    cpu: 500m
-    memory: 512Mi
-
-# Service Monitor for Prometheus scraping
 serviceMonitor:
-  enabled: false
-  interval: 30s
-  scrapeTimeout: 10s
-  labels:
+  enabled: true
+  namespace: monitoring
+  additionalLabels:
     release: kube-prom-stack
-  multipleTarget:
-    enabled: false
-    targets: []
-
-replicas: 1
-
-service:
-  type: ClusterIP
-  port: 9104
-
-# Collectors configuration
-collectors:
-  - global_status
-  - global_variables
-  - slave_status
-  - slave_hosts
-  - slave_lag
-  - heartbeat
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+config:
+  extraArgs:
+    - --tls.insecure-skip-verify

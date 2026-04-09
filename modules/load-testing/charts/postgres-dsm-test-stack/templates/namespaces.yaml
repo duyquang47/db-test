@@ -1,0 +1,20 @@
+{{- $loadtestEnabled := eq (include "pgdsm.loadtestEnabled" .) "true" }}
+{{- if .Values.namespaceManagement.createMonitoring }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.labels" . | nindent 4 }}
+{{- end }}
+{{- if and .Values.namespaceManagement.createMonitoring .Values.namespaceManagement.createLoadtest $loadtestEnabled }}
+---
+{{- end }}
+{{- if and .Values.namespaceManagement.createLoadtest $loadtestEnabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "pgdsm.loadtestNamespace" . }}
+  labels:
+    {{- include "pgdsm.labels" . | nindent 4 }}
+{{- end }}

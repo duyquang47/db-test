@@ -92,6 +92,20 @@ pushgateway_scrape_interval = "15s"
 metrics_pusher_image = "curlimages/curl:8.7.1"
 
 ################################################################################
+# DSM DB Cluster OS Metrics Configuration
+################################################################################
+
+# Collect OS/node/pod metrics directly from the Kubernetes cluster that hosts
+# the DSM PostgreSQL workload, then push them to Pushgateway for Grafana.
+db_cluster_metrics_enabled = true
+
+# Kubeconfig for the Kubernetes cluster where the DSM PostgreSQL pods run
+db_cluster_kubeconfig_path = "./k8s-db.yaml"
+
+# Polling interval in seconds for DB cluster OS metrics collection
+db_cluster_poll_interval_seconds = 30
+
+################################################################################
 # Grafana Dashboard Configuration
 ################################################################################
 
@@ -141,8 +155,8 @@ pgbench_connection = {
 pgbench_jobs = {
   # Initialization job - creates and prepares test data
   init = {
-    enabled = true
-    scale   = 20  # Database size scale factor
+    enabled = false
+    scale   = 10 # Database size scale factor
   }
 
   # Quick smoke test - verifies setup works
@@ -199,8 +213,8 @@ pgbench_jobs = {
 
   # Stress test - maximum load
   stress = {
-    enabled = false
-    steps   = "50 100 150"
+    enabled  = false
+    steps    = "50 100 150"
     threads  = 10
     duration = 300
   }

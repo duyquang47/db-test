@@ -1,0 +1,29 @@
+{{- if and .Values.probes.enabled .Values.blackboxExporter.enabled }}
+{{- range $target := .Values.probes.targets }}
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: {{ printf "%s-%s" $.Release.Name $target.name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "pgdsm.monitoringNamespace" $ }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" $ "component" "blackbox-probe") | nindent 4 }}
+    {{- with $.Values.probes.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  interval: {{ $.Values.probes.interval | quote }}
+  module: tcp_connect
+  jobName: {{ printf "blackbox-%s" $target.name | quote }}
+  prober:
+    url: {{ printf "%s.%s.svc.cluster.local:9115" (include "pgdsm.componentName" (dict "Release" $.Release "component" "blackbox-exporter")) (include "pgdsm.monitoringNamespace" $) | quote }}
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - {{ printf "%s:%v" $target.endpoint $target.port | quote }}
+      labels:
+        target_name: {{ $target.name | quote }}
+        db_engine: {{ $target.engine | quote }}
+---
+{{- end }}
+{{- end }}

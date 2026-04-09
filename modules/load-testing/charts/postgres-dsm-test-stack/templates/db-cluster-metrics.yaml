@@ -1,0 +1,425 @@
+{{- if and .Values.dbClusterMetrics.enabled .Values.pushgateway.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "db-cluster-kubeconfig") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "db-cluster-metrics") | nindent 4 }}
+type: Opaque
+stringData:
+  kubeconfig.yaml: |
+{{ .Values.dbClusterMetrics.kubeconfig | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "db-cluster-metrics-scripts") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "db-cluster-metrics") | nindent 4 }}
+data:
+  collector.py: |
+    #!/usr/bin/env python3
+    import base64
+    import json
+    import math
+    import os
+    import ssl
+    import tempfile
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from pathlib import Path
+
+
+    def parse_kubeconfig(text):
+        values = {}
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("server: "):
+                values["server"] = line.split(": ", 1)[1].strip()
+            elif line.startswith("certificate-authority-data: "):
+                values["ca"] = line.split(": ", 1)[1].strip()
+            elif line.startswith("client-certificate-data: "):
+                values["cert"] = line.split(": ", 1)[1].strip()
+            elif line.startswith("client-key-data: "):
+                values["key"] = line.split(": ", 1)[1].strip()
+        missing = [name for name in ("server", "ca", "cert", "key") if name not in values]
+        if missing:
+            raise RuntimeError(f"Missing kubeconfig fields: {', '.join(missing)}")
+        return values
+
+
+    def parse_cpu(value):
+        value = str(value).strip()
+        if value.endswith("n"):
+            return float(value[:-1]) / 1_000_000_000
+        if value.endswith("u"):
+            return float(value[:-1]) / 1_000_000
+        if value.endswith("m"):
+            return float(value[:-1]) / 1_000
+        return float(value)
+
+
+    def parse_bytes(value):
+        value = str(value).strip()
+        units = {
+            "Ki": 1024,
+            "Mi": 1024 ** 2,
+            "Gi": 1024 ** 3,
+            "Ti": 1024 ** 4,
+            "Pi": 1024 ** 5,
+            "Ei": 1024 ** 6,
+            "K": 1000,
+            "M": 1000 ** 2,
+            "G": 1000 ** 3,
+            "T": 1000 ** 4,
+            "P": 1000 ** 5,
+            "E": 1000 ** 6,
+        }
+        for suffix, factor in units.items():
+            if value.endswith(suffix):
+                return float(value[:-len(suffix)]) * factor
+        return float(value)
+
+
+    def api_get(api_server, ssl_context, path):
+        url = api_server.rstrip("/") + path
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(request, context=ssl_context, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+
+    def build_ssl_context(kubeconfig_text):
+        config = parse_kubeconfig(kubeconfig_text)
+        tempdir = tempfile.TemporaryDirectory()
+        temp_path = Path(tempdir.name)
+        ca_path = temp_path / "ca.crt"
+        cert_path = temp_path / "client.crt"
+        key_path = temp_path / "client.key"
+        ca_path.write_bytes(base64.b64decode(config["ca"]))
+        cert_path.write_bytes(base64.b64decode(config["cert"]))
+        key_path.write_bytes(base64.b64decode(config["key"]))
+        context = ssl.create_default_context(cafile=str(ca_path))
+        context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        return config["server"], context, tempdir
+
+
+    def escape_label(value):
+        return str(value).replace("\\", "\\\\").replace("\"", "\\\"")
+
+
+    def format_labels(labels):
+        parts = []
+        for key in sorted(labels):
+            parts.append(f'{key}="{escape_label(labels[key])}"')
+        return ",".join(parts)
+
+
+    def gauge(name, value, labels=None):
+        labels = labels or {}
+        rendered_labels = format_labels(labels)
+        if rendered_labels:
+            return f"{name}" + "{" + rendered_labels + "} " + str(value)
+        return f"{name} {value}"
+
+
+    def push_metrics(pushgateway_url, target_name, payload):
+        url = "{}/metrics/job/dsm-db-cluster/target/{}".format(
+            pushgateway_url.rstrip("/"),
+            urllib.parse.quote(target_name, safe="")
+        )
+        request = urllib.request.Request(
+            url,
+            data=payload.encode("utf-8"),
+            method="PUT",
+            headers={"Content-Type": "text/plain; version=0.0.4"},
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            response.read()
+
+
+    def find_db_service(services, target_host, target_port):
+        for service in services:
+            spec = service.get("spec", {})
+            ports = spec.get("ports", [])
+            has_port = any(int(port.get("port", 0)) == int(target_port) for port in ports)
+            if not has_port:
+                continue
+
+            lb_ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
+            ingress_ips = [item.get("ip") or item.get("hostname") for item in lb_ingress]
+            external_ips = spec.get("externalIPs", [])
+            annotation_ips = []
+            annotations = service.get("metadata", {}).get("annotations", {})
+            for key in ("kube-vip.io/loadbalancerIPs", "resource-provisioners.vmware-sql-postgres/load-balancer-hostname"):
+                if annotations.get(key):
+                    annotation_ips.extend([part.strip() for part in annotations[key].split(",") if part.strip()])
+
+            if target_host in ingress_ips or target_host in external_ips or target_host in annotation_ips:
+                return service
+        raise RuntimeError(f"Unable to find service for {target_host}:{target_port}")
+
+
+    def build_metrics():
+        kubeconfig_text = Path(os.environ["DB_CLUSTER_KUBECONFIG"]).read_text(encoding="utf-8")
+        api_server, ssl_context, tempdir = build_ssl_context(kubeconfig_text)
+        try:
+            target_name = os.environ["DB_TARGET_NAME"]
+            target_host = os.environ["DB_TARGET_HOST"]
+            target_port = int(os.environ["DB_TARGET_PORT"])
+            base_labels = {
+                "target": target_name,
+                "instance": target_host,
+            }
+
+            services = api_get(api_server, ssl_context, "/api/v1/services").get("items", [])
+            service = find_db_service(services, target_host, target_port)
+            metadata = service["metadata"]
+            db_namespace = metadata["namespace"]
+            db_service = metadata["name"]
+            postgres_instance = metadata.get("labels", {}).get("postgres-instance", db_service)
+            selector = service.get("spec", {}).get("selector", {})
+
+            pods = api_get(api_server, ssl_context, f"/api/v1/namespaces/{db_namespace}/pods").get("items", [])
+            db_pods = [
+                pod for pod in pods
+                if pod.get("metadata", {}).get("labels", {}).get("postgres-instance") == postgres_instance
+            ]
+
+            if not db_pods:
+                raise RuntimeError(f"No PostgreSQL pods found for instance {postgres_instance}")
+
+            node_objects = api_get(api_server, ssl_context, "/api/v1/nodes").get("items", [])
+            nodes_by_name = {node["metadata"]["name"]: node for node in node_objects}
+
+            pod_metrics_items = api_get(
+                api_server,
+                ssl_context,
+                f"/apis/metrics.k8s.io/v1beta1/namespaces/{db_namespace}/pods",
+            ).get("items", [])
+            pod_metrics_by_name = {item["metadata"]["name"]: item for item in pod_metrics_items}
+
+            lines = [
+                "# TYPE dsm_db_cluster_scrape_success gauge",
+                "# TYPE dsm_db_node_info gauge",
+                "# TYPE dsm_db_node_cpu_capacity_cores gauge",
+                "# TYPE dsm_db_node_cpu_usage_cores gauge",
+                "# TYPE dsm_db_node_cpu_utilization_ratio gauge",
+                "# TYPE dsm_db_node_memory_capacity_bytes gauge",
+                "# TYPE dsm_db_node_memory_available_bytes gauge",
+                "# TYPE dsm_db_node_memory_usage_bytes gauge",
+                "# TYPE dsm_db_node_memory_utilization_ratio gauge",
+                "# TYPE dsm_db_node_fs_capacity_bytes gauge",
+                "# TYPE dsm_db_node_fs_available_bytes gauge",
+                "# TYPE dsm_db_node_fs_usage_bytes gauge",
+                "# TYPE dsm_db_node_fs_utilization_ratio gauge",
+                "# TYPE dsm_db_node_network_rx_bytes_total gauge",
+                "# TYPE dsm_db_node_network_tx_bytes_total gauge",
+                "# TYPE dsm_db_pod_info gauge",
+                "# TYPE dsm_db_pod_cpu_usage_cores gauge",
+                "# TYPE dsm_db_pod_memory_usage_bytes gauge",
+            ]
+
+            service_labels = {
+                **base_labels,
+                "db_namespace": db_namespace,
+                "db_service": db_service,
+                "postgres_instance": postgres_instance,
+            }
+            lines.append(gauge("dsm_db_cluster_scrape_success", 1, service_labels))
+
+            db_node_names = sorted({
+                pod.get("spec", {}).get("nodeName")
+                for pod in db_pods
+                if pod.get("spec", {}).get("nodeName")
+            })
+
+            primary_nodes = {
+                pod.get("spec", {}).get("nodeName")
+                for pod in db_pods
+                if pod.get("metadata", {}).get("labels", {}).get("role") == "read-write"
+            }
+
+            for node_name in db_node_names:
+                node_object = nodes_by_name.get(node_name, {})
+                node_status = node_object.get("status", {})
+                capacity = node_status.get("capacity", {})
+                node_labels = {
+                    **service_labels,
+                    "node": node_name,
+                    "os_image": node_status.get("nodeInfo", {}).get("osImage", "unknown"),
+                    "node_role": "primary" if node_name in primary_nodes else "secondary",
+                }
+
+                summary = api_get(
+                    api_server,
+                    ssl_context,
+                    f"/api/v1/nodes/{urllib.parse.quote(node_name, safe='')}/proxy/stats/summary",
+                ).get("node", {})
+
+                cpu_capacity = parse_cpu(capacity.get("cpu", 0))
+                cpu_usage = float(summary.get("cpu", {}).get("usageNanoCores", 0)) / 1_000_000_000
+                cpu_ratio = (cpu_usage / cpu_capacity) if cpu_capacity else 0
+
+                memory_capacity = parse_bytes(capacity.get("memory", 0))
+                memory_available = float(summary.get("memory", {}).get("availableBytes", 0))
+                memory_usage = float(summary.get("memory", {}).get("workingSetBytes", 0))
+                memory_ratio = (memory_usage / memory_capacity) if memory_capacity else 0
+
+                fs = summary.get("fs", {})
+                fs_capacity = float(fs.get("capacityBytes", 0))
+                fs_available = float(fs.get("availableBytes", 0))
+                fs_usage = float(fs.get("usedBytes", 0))
+                fs_ratio = (fs_usage / fs_capacity) if fs_capacity else 0
+
+                network = summary.get("network", {})
+                rx_bytes = float(network.get("rxBytes", 0))
+                tx_bytes = float(network.get("txBytes", 0))
+
+                lines.extend([
+                    gauge("dsm_db_node_info", 1, node_labels),
+                    gauge("dsm_db_node_cpu_capacity_cores", cpu_capacity, node_labels),
+                    gauge("dsm_db_node_cpu_usage_cores", cpu_usage, node_labels),
+                    gauge("dsm_db_node_cpu_utilization_ratio", cpu_ratio, node_labels),
+                    gauge("dsm_db_node_memory_capacity_bytes", memory_capacity, node_labels),
+                    gauge("dsm_db_node_memory_available_bytes", memory_available, node_labels),
+                    gauge("dsm_db_node_memory_usage_bytes", memory_usage, node_labels),
+                    gauge("dsm_db_node_memory_utilization_ratio", memory_ratio, node_labels),
+                    gauge("dsm_db_node_fs_capacity_bytes", fs_capacity, node_labels),
+                    gauge("dsm_db_node_fs_available_bytes", fs_available, node_labels),
+                    gauge("dsm_db_node_fs_usage_bytes", fs_usage, node_labels),
+                    gauge("dsm_db_node_fs_utilization_ratio", fs_ratio, node_labels),
+                    gauge("dsm_db_node_network_rx_bytes_total", rx_bytes, node_labels),
+                    gauge("dsm_db_node_network_tx_bytes_total", tx_bytes, node_labels),
+                ])
+
+            for pod in db_pods:
+                pod_name = pod.get("metadata", {}).get("name", "unknown")
+                labels = pod.get("metadata", {}).get("labels", {})
+                pod_role = labels.get("role", labels.get("type", "unknown"))
+                pod_type = labels.get("type", "unknown")
+                node_name = pod.get("spec", {}).get("nodeName", "unknown")
+                pod_labels = {
+                    **service_labels,
+                    "pod": pod_name,
+                    "node": node_name,
+                    "role": pod_role,
+                    "pod_type": pod_type,
+                }
+
+                pod_metric = pod_metrics_by_name.get(pod_name, {})
+                cpu_usage = 0.0
+                memory_usage = 0.0
+                for container in pod_metric.get("containers", []):
+                    cpu_usage += parse_cpu(container.get("usage", {}).get("cpu", 0))
+                    memory_usage += parse_bytes(container.get("usage", {}).get("memory", 0))
+
+                lines.extend([
+                    gauge("dsm_db_pod_info", 1, pod_labels),
+                    gauge("dsm_db_pod_cpu_usage_cores", cpu_usage, pod_labels),
+                    gauge("dsm_db_pod_memory_usage_bytes", memory_usage, pod_labels),
+                ])
+
+            return "\n".join(lines) + "\n"
+        finally:
+            tempdir.cleanup()
+
+
+    def push_failure_metric(pushgateway_url, target_name, target_host, error_message):
+        payload = "\n".join([
+            "# TYPE dsm_db_cluster_scrape_success gauge",
+            gauge(
+                "dsm_db_cluster_scrape_success",
+                0,
+                {
+                    "target": target_name,
+                    "instance": target_host,
+                    "error": error_message[:120],
+                },
+            ),
+            "",
+        ])
+        push_metrics(pushgateway_url, target_name, payload)
+
+
+    def main():
+        target_name = os.environ["DB_TARGET_NAME"]
+        target_host = os.environ["DB_TARGET_HOST"]
+        pushgateway_url = os.environ["PUSHGATEWAY_URL"]
+        poll_interval = max(int(os.environ.get("DB_CLUSTER_POLL_INTERVAL_SECONDS", "30")), 15)
+        while True:
+            try:
+                payload = build_metrics()
+                push_metrics(pushgateway_url, target_name, payload)
+                print("Pushed DSM DB cluster metrics successfully", flush=True)
+            except Exception as exc:
+                print(f"DSM DB cluster metrics collection failed: {exc}", flush=True)
+                try:
+                    push_failure_metric(pushgateway_url, target_name, target_host, str(exc))
+                except Exception as push_exc:
+                    print(f"Unable to push failure metric: {push_exc}", flush=True)
+            time.sleep(poll_interval)
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "db-cluster-metrics") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "db-cluster-metrics") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: db-cluster-metrics
+  template:
+    metadata:
+      labels:
+        {{- include "pgdsm.componentLabels" (dict "root" . "component" "db-cluster-metrics") | nindent 8 }}
+    spec:
+      containers:
+        - name: db-cluster-metrics
+          image: {{ .Values.images.dbClusterCollector }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /scripts/collector.py
+          env:
+            - name: DB_CLUSTER_KUBECONFIG
+              value: /kubeconfig/kubeconfig.yaml
+            - name: DB_TARGET_NAME
+              value: {{ .Values.dbClusterMetrics.targetName | quote }}
+            - name: DB_TARGET_HOST
+              value: {{ .Values.dbClusterMetrics.targetHost | quote }}
+            - name: DB_TARGET_PORT
+              value: {{ .Values.dbClusterMetrics.targetPort | quote }}
+            - name: DB_CLUSTER_POLL_INTERVAL_SECONDS
+              value: {{ .Values.dbClusterMetrics.pollIntervalSeconds | quote }}
+            - name: PUSHGATEWAY_URL
+              value: {{ include "pgdsm.pushgatewayUrl" . | quote }}
+          resources:
+            {{- toYaml .Values.dbClusterMetrics.resources | nindent 12 }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /kubeconfig
+              readOnly: true
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "db-cluster-kubeconfig") }}
+        - name: scripts
+          configMap:
+            name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "db-cluster-metrics-scripts") }}
+            defaultMode: 493
+{{- end }}

@@ -1,0 +1,162 @@
+{{- $profile := index .Values.testProfiles .Values.testProfile -}}
+{{- $defaultScale := printf "%v" .Values.jobs.init.scale -}}
+{{- $jobs := list
+  (dict
+    "enabled" .Values.jobs.init.enabled
+    "component" "init"
+    "containerName" "pgbench-init"
+    "script" "/scripts/init.sh"
+    "scenario" "init"
+    "mode" "init"
+    "ttl" .Values.jobs.init.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_SCALE" "value" (printf "%v" .Values.jobs.init.scale))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" (printf "%v" .Values.jobs.init.scale))
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.smoke.enabled
+    "component" "smoke"
+    "containerName" "pgbench-smoke"
+    "script" "/scripts/smoke.sh"
+    "scenario" "smoke"
+    "mode" "rw"
+    "ttl" .Values.jobs.smoke.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.smoke.clients .Values.jobs.smoke.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.smoke.threads .Values.jobs.smoke.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.smoke.duration .Values.jobs.smoke.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.baselineRw.enabled
+    "component" "baseline-rw"
+    "containerName" "pgbench-baseline-rw"
+    "script" "/scripts/baseline-rw.sh"
+    "scenario" "baseline-rw"
+    "mode" "rw"
+    "ttl" .Values.jobs.baselineRw.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.baselineRw.clients .Values.jobs.baselineRw.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.baselineRw.threads .Values.jobs.baselineRw.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.baselineRw.duration .Values.jobs.baselineRw.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.baselineRo.enabled
+    "component" "baseline-ro"
+    "containerName" "pgbench-baseline-ro"
+    "script" "/scripts/baseline-ro.sh"
+    "scenario" "baseline-ro"
+    "mode" "ro"
+    "ttl" .Values.jobs.baselineRo.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.baselineRo.clients .Values.jobs.baselineRo.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.baselineRo.threads .Values.jobs.baselineRo.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.baselineRo.duration .Values.jobs.baselineRo.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.ramp.enabled
+    "component" "ramp"
+    "containerName" "pgbench-ramp"
+    "script" "/scripts/ramp.sh"
+    "scenario" "ramp"
+    "mode" "rw"
+    "ttl" .Values.jobs.ramp.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_STEPS" "value" (default $profile.ramp.steps .Values.jobs.ramp.steps))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.ramp.threads .Values.jobs.ramp.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.ramp.duration .Values.jobs.ramp.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.dataSweep10m.enabled
+    "component" "data-sweep-10m"
+    "containerName" "pgbench-data-sweep-10m"
+    "script" "/scripts/data-sweep.sh"
+    "scenario" "data-sweep-10m"
+    "mode" "rw"
+    "ttl" .Values.jobs.dataSweep10m.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_SCALE" "value" .Values.jobs.dataSweep10m.scale)
+      (dict "name" "PGBENCH_SKIP_INIT" "value" (ternary "false" "true" .Values.jobs.dataSweep10m.reinitialize))
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.dataSweep.clients .Values.jobs.dataSweep10m.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.dataSweep.threads .Values.jobs.dataSweep10m.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.dataSweep.duration .Values.jobs.dataSweep10m.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" .Values.jobs.dataSweep10m.scale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.dataSweep20m.enabled
+    "component" "data-sweep-20m"
+    "containerName" "pgbench-data-sweep-20m"
+    "script" "/scripts/data-sweep.sh"
+    "scenario" "data-sweep-20m"
+    "mode" "rw"
+    "ttl" .Values.jobs.dataSweep20m.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_SCALE" "value" .Values.jobs.dataSweep20m.scale)
+      (dict "name" "PGBENCH_SKIP_INIT" "value" (ternary "false" "true" .Values.jobs.dataSweep20m.reinitialize))
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.dataSweep.clients .Values.jobs.dataSweep20m.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.dataSweep.threads .Values.jobs.dataSweep20m.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.dataSweep.duration .Values.jobs.dataSweep20m.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" .Values.jobs.dataSweep20m.scale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.stress.enabled
+    "component" "stress"
+    "containerName" "pgbench-stress"
+    "script" "/scripts/stress.sh"
+    "scenario" "stress"
+    "mode" "rw"
+    "ttl" .Values.jobs.stress.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_STEPS" "value" (default $profile.stress.steps .Values.jobs.stress.steps))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.stress.threads .Values.jobs.stress.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.stress.duration .Values.jobs.stress.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.haObservation.enabled
+    "component" "ha-observation"
+    "containerName" "pgbench-ha-observation"
+    "script" "/scripts/ha-observation.sh"
+    "scenario" "ha-observation"
+    "mode" "rw"
+    "ttl" .Values.jobs.haObservation.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.haObservation.clients .Values.jobs.haObservation.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.haObservation.threads .Values.jobs.haObservation.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.haObservation.duration .Values.jobs.haObservation.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+  (dict
+    "enabled" .Values.jobs.soak.enabled
+    "component" "soak"
+    "containerName" "pgbench-soak"
+    "script" "/scripts/soak.sh"
+    "scenario" "soak"
+    "mode" "rw"
+    "ttl" .Values.jobs.soak.ttlSecondsAfterFinished
+    "env" (list
+      (dict "name" "PGBENCH_CLIENTS" "value" (default $profile.soak.clients .Values.jobs.soak.clients))
+      (dict "name" "PGBENCH_THREADS" "value" (default $profile.soak.threads .Values.jobs.soak.threads))
+      (dict "name" "PGBENCH_DURATION" "value" (default $profile.soak.duration .Values.jobs.soak.duration))
+      (dict "name" "PGBENCH_DATASET_SCALE" "value" $defaultScale)
+    )
+  )
+-}}
+{{- range $job := $jobs }}
+{{- if $job.enabled }}
+---
+{{ include "pgdsm.renderPgbenchJob" (dict "root" $ "job" $job) }}
+{{- end }}
+{{- end }}

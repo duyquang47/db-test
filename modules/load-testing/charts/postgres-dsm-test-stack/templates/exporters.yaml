@@ -1,0 +1,86 @@
+{{- if .Values.blackboxExporter.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "blackbox-config") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "blackbox-exporter") | nindent 4 }}
+data:
+  blackbox.yml: |
+    modules:
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+      tcp_tls:
+        prober: tcp
+        timeout: 5s
+        tcp:
+          tls: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "blackbox-exporter") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "blackbox-exporter") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        {{- include "pgdsm.componentLabels" (dict "root" . "component" "blackbox-exporter") | nindent 8 }}
+    spec:
+      containers:
+        - name: blackbox-exporter
+          image: {{ .Values.images.blackboxExporter }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/blackbox/blackbox.yml
+          ports:
+            - containerPort: 9115
+              name: http
+          resources:
+            {{- toYaml .Values.blackboxExporter.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "blackbox-config") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pgdsm.componentName" (dict "Release" .Release "component" "blackbox-exporter") }}
+  namespace: {{ include "pgdsm.monitoringNamespace" . }}
+  labels:
+    {{- include "pgdsm.componentLabels" (dict "root" . "component" "blackbox-exporter") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: blackbox-exporter
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http
+{{- end }}

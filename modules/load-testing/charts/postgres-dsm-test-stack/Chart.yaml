@@ -1,0 +1,6 @@
+apiVersion: v2
+name: postgres-dsm-test-stack
+description: "Helm chart for PostgreSQL DSM test addons: blackbox, Pushgateway, dashboards, pgbench, and DB cluster metrics"
+type: application
+version: 0.2.0
+appVersion: "1.0.0"

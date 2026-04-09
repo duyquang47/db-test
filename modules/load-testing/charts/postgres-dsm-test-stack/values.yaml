@@ -1,0 +1,260 @@
+testProfile: 2c4g
+
+namespaceManagement:
+  createMonitoring: true
+  createLoadtest: true
+
+namespaces:
+  monitoring: monitoring
+  loadtest: loadtest
+
+images:
+  blackboxExporter: quay.io/prometheus/blackbox-exporter:v0.25.0
+  pgbench: postgres:17.5
+  pushgateway: prom/pushgateway:v1.11.1
+  metricsPusher: curlimages/curl:8.7.1
+  dbClusterCollector: python:3.12-slim
+
+postgres:
+  host: REPLACE_DB_HOST
+  port: 5432
+  benchmarkDatabase: REPLACE_BENCHMARK_DATABASE
+  sslmode: require
+  pgbenchUser: REPLACE_PGBENCH_USER
+  pgbenchPassword: REPLACE_PGBENCH_PASSWORD
+
+blackboxExporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+loadtest:
+  runner:
+    enabled: true
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+pushgateway:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 9091
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    additionalLabels: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  pusher:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+      cpu: 100m
+      memory: 128Mi
+
+dbClusterMetrics:
+  enabled: false
+  kubeconfig: ""
+  pollIntervalSeconds: 30
+  targetName: ""
+  targetHost: ""
+  targetPort: 5432
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+grafanaDashboards:
+  enabled: true
+  checksum: ""
+
+probes:
+  enabled: false
+  interval: 30s
+  additionalLabels: {}
+  targets: []
+
+testProfiles:
+  2c2g:
+    smoke:
+      clients: "2"
+      threads: "2"
+      duration: "300"
+    baselineRw:
+      clients: "4"
+      threads: "2"
+      duration: "900"
+    baselineRo:
+      clients: "8"
+      threads: "4"
+      duration: "900"
+    ramp:
+      steps: "4 8 16 24 32"
+      threads: "4"
+      duration: "600"
+    dataSweep:
+      clients: "8"
+      threads: "4"
+      duration: "900"
+    stress:
+      steps: "8 16 24 32 40"
+      threads: "4"
+      duration: "600"
+    haObservation:
+      clients: "8"
+      threads: "4"
+      duration: "1800"
+    soak:
+      clients: "12"
+      threads: "4"
+      duration: "7200"
+  2c4g:
+    smoke:
+      clients: "4"
+      threads: "2"
+      duration: "300"
+    baselineRw:
+      clients: "5"
+      threads: "2"
+      duration: "900"
+    baselineRo:
+      clients: "10"
+      threads: "4"
+      duration: "900"
+    ramp:
+      steps: "10 25 50 75 100 125 150"
+      threads: "8"
+      duration: "600"
+    dataSweep:
+      clients: "32"
+      threads: "8"
+      duration: "900"
+    stress:
+      steps: "100 125 150 175 200"
+      threads: "8"
+      duration: "600"
+    haObservation:
+      clients: "32"
+      threads: "8"
+      duration: "1800"
+    soak:
+      clients: "32"
+      threads: "8"
+      duration: "7200"
+  2c8g:
+    smoke:
+      clients: "4"
+      threads: "2"
+      duration: "300"
+    baselineRw:
+      clients: "8"
+      threads: "4"
+      duration: "900"
+    baselineRo:
+      clients: "16"
+      threads: "8"
+      duration: "900"
+    ramp:
+      steps: "16 32 64 96 128 160"
+      threads: "8"
+      duration: "600"
+    dataSweep:
+      clients: "48"
+      threads: "8"
+      duration: "900"
+    stress:
+      steps: "128 160 192 224 256"
+      threads: "8"
+      duration: "600"
+    haObservation:
+      clients: "48"
+      threads: "8"
+      duration: "1800"
+    soak:
+      clients: "48"
+      threads: "8"
+      duration: "10800"
+
+jobs:
+  init:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    scale: "10"
+  smoke:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    clients: ""
+    threads: ""
+    duration: ""
+  baselineRw:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    clients: ""
+    threads: ""
+    duration: ""
+  baselineRo:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    clients: ""
+    threads: ""
+    duration: ""
+  ramp:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    steps: ""
+    threads: ""
+    duration: ""
+  dataSweep10m:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    scale: "100"
+    reinitialize: true
+    clients: ""
+    threads: ""
+    duration: ""
+  dataSweep20m:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    scale: "200"
+    reinitialize: true
+    clients: ""
+    threads: ""
+    duration: ""
+  stress:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    steps: ""
+    threads: ""
+    duration: ""
+  haObservation:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    clients: ""
+    threads: ""
+    duration: ""
+  soak:
+    enabled: false
+    ttlSecondsAfterFinished: 86400
+    clients: ""
+    threads: ""
+    duration: ""
