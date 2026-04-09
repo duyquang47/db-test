@@ -1,14 +1,14 @@
 # Local / Development
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars              # Never commit credentials!
-*.tfvars
-!terraform.tfvars.example
+# terraform.tfvars              # Never commit credentials!
+# *.tfvars
+# !terraform.tfvars.example
 
 # State files
-*.tfstate
-*.tfstate.*
-.terraform.tfstate*
+# *.tfstate
+# *.tfstate.*
+# .terraform.tfstate*
 
 # Logs
 crash.log
