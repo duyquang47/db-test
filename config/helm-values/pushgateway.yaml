@@ -1,0 +1,33 @@
+# Pushgateway Helm Values
+
+replicaCount: 1
+
+image:
+  repository: prom/pushgateway
+  tag: v1.11.1
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 9091
+  targetPort: 9091
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+persistence:
+  enabled: false
+
+ingress:
+  enabled: false
+
+# ServiceMonitor for Prometheus scraping
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  scrapeTimeout: 10s

@@ -1,0 +1,195 @@
+# Example Terraform Configuration for PostgreSQL DSM Test Stack
+
+# SETUP INSTRUCTIONS:
+# 1. Copy this file:
+#    cp config/terraform.tfvars.example terraform.tfvars
+# 2. Edit terraform.tfvars with your values
+# 3. NEVER commit terraform.tfvars (it contains secrets)
+# 4. Set S3 credentials before terraform init:
+#    export AWS_ACCESS_KEY_ID='your_key'
+#    export AWS_SECRET_ACCESS_KEY='your_secret'
+
+################################################################################
+# Kubernetes Configuration
+################################################################################
+
+kubeconfig_path = "./kubeconfig"
+# kubeconfig_context = "my-context"  # Leave null to use current-context
+
+################################################################################
+# MySQL Monitoring (Optional)
+################################################################################
+
+mysql_default_credentials = {
+  user     = "admin"
+  password = "your_mysql_password"
+}
+
+mysql_targets = [
+  # {
+  #   endpoint = "mysql.example.com"
+  #   name     = "production"
+  #   port     = 3306
+  #   user     = "exporter_user"      # Optional, uses default if omitted
+  #   password = "exporter_password"  # Optional, uses default if omitted
+  # }
+]
+
+################################################################################
+# PostgreSQL Monitoring (Required)
+################################################################################
+
+postgres_default_credentials = {
+  user     = "postgres"
+  password = "your_postgresql_password"
+}
+
+postgres_targets = [
+  {
+    endpoint      = "your-postgres-host.example.com"
+    name          = "production"
+    port          = 5432
+    database_name = "postgres"
+    user          = "exporter_user"
+    password      = "exporter_password"
+  }
+]
+
+################################################################################
+# Kubernetes Namespaces
+################################################################################
+
+monitoring_namespace = "monitoring"
+loadtest_namespace   = "loadtest"
+
+################################################################################
+# Monitoring Components
+################################################################################
+
+blackbox_enabled          = true
+blackbox_image           = "quay.io/prometheus/blackbox-exporter:v0.25.0"
+blackbox_probe_interval  = "30s"
+
+pushgateway_enabled      = true
+pushgateway_image        = "prom/pushgateway:v1.11.1"
+pushgateway_scrape_interval = "15s"
+
+grafana_dashboard_enabled = true
+
+################################################################################
+# pgbench Load Testing
+################################################################################
+
+pgbench_enabled     = true
+pgbench_image       = "postgres:17.5"
+test_profile        = "2c4g"          # Options: 2c2g, 2c4g, 2c8g
+pgbench_database    = "pgbench"
+pgbench_sslmode     = "disable"
+pgbench_target_name = "production"
+
+# REQUIRED if pgbench_enabled = true
+pgbench_connection = {
+  host     = "your-postgres-host.example.com"
+  port     = 5432
+  database = "pgbench_db"
+  user     = "pgbench_user"
+  password = "pgbench_password"
+  sslmode  = "disable"
+}
+
+################################################################################
+# Benchmark Jobs (All disabled by default)
+################################################################################
+
+pgbench_jobs = {
+  # Database initialization
+  init = {
+    enabled = false
+    scale   = 10
+  }
+
+  # Quick verification
+  smoke = {
+    enabled = false
+    # clients = 4
+    # threads = 1
+    # duration = 60
+  }
+
+  # Baseline read/write
+  baseline_rw = {
+    enabled = false
+    # clients  = 20
+    # threads  = 4
+    # duration = 300
+  }
+
+  # Baseline read-only
+  baseline_ro = {
+    enabled = false
+    # clients  = 20
+    # threads  = 4
+    # duration = 300
+  }
+
+  # Ramp-up test
+  ramp = {
+    enabled = false
+    # steps    = "4,8,16,32"
+    # threads  = 2
+    # duration = 60
+  }
+
+  # Data sweep 10M rows
+  data_sweep_10m = {
+    enabled      = false
+    reinitialize = true
+    # scale    = 100
+    # clients  = 10
+    # threads  = 2
+    # duration = 300
+  }
+
+  # Data sweep 20M rows
+  data_sweep_20m = {
+    enabled      = false
+    reinitialize = true
+    # scale    = 200
+    # clients  = 10
+    # threads  = 2
+    # duration = 300
+  }
+
+  # Stress test
+  stress = {
+    enabled = false
+    # clients  = 50
+    # threads  = 10
+    # duration = 300
+  }
+
+  # HA observation
+  ha_observation = {
+    enabled = false
+    # clients  = 20
+    # threads  = 4
+    # duration = 600
+  }
+
+  # Soak test
+  soak = {
+    enabled = false
+    # clients  = 10
+    # threads  = 2
+    # duration = 3600
+  }
+}
+
+################################################################################
+# Backend Configuration
+################################################################################
+
+# S3/MinIO credentials from environment variables:
+#   export AWS_ACCESS_KEY_ID='minioadmin'
+#   export AWS_SECRET_ACCESS_KEY='minioadmin'
+#   terraform init

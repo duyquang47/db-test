@@ -1,0 +1,39 @@
+# Local / Development
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars              # Never commit credentials!
+*.tfvars
+!terraform.tfvars.example
+
+# State files
+*.tfstate
+*.tfstate.*
+.terraform.tfstate*
+
+# Logs
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kubeconfig
+kubeconfig
+kubeconfig.*
+
+# Backup files
+*.backup
+*.bak
