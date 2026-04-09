@@ -33,6 +33,7 @@ Thumbs.db
 # Kubeconfig
 kubeconfig
 kubeconfig.*
+k8s-db.yaml
 
 # Backup files
 *.backup
